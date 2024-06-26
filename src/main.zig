@@ -3,12 +3,16 @@ const net = std.net;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
-const Packet = struct {
+const packet = struct {
     tag: u8,
     length: u16,
     data: []u8,
 
     const Self = @This();
+
+    fn new(tag: u8, length: u16, data: []u8) Self {
+        return packet{ .tag = tag, .length = length, .data = data };
+    }
 
     fn destroy(self: *Self) void {
         gpa.allocator().free(self.data);
@@ -19,45 +23,44 @@ const Packet = struct {
     }
 };
 
-pub fn read_packet(stream: net.Stream) net.Stream.ReadError!Packet {
-    var buf: [3]u8 = undefined;
-    const len = try stream.readAtLeast(&buf, 3);
+pub fn read_packet(stream: net.Stream) net.Stream.ReadError!packet {
+    var header_buf: [3]u8 = undefined;
+    const header_len = try stream.readAtLeast(&header_buf, 3);
 
-    if (len < 3) return net.Stream.ReadError.Unexpected;
+    if (header_len < 3) return net.Stream.ReadError.Unexpected;
+    const length = @as(u16, header_buf[1]) << @as(u16, 8) | @as(u16, header_buf[2]);
 
-    const buf_data = gpa.allocator().alloc(u8, len) catch {
+    const buf_data = gpa.allocator().alloc(u8, length) catch {
         return net.Stream.ReadError.SystemResources;
     };
-    const data = try stream.readAtLeast(buf_data, len);
+    const data = try stream.readAtLeast(buf_data, length);
 
-    if (data < len) return net.Stream.ReadError.Unexpected;
+    if (data < length) return net.Stream.ReadError.Unexpected;
 
-    return Packet{
-        .tag = buf[0],
-        .length = @as(u16, buf[1]) << @as(u16, 8) | @as(u16, buf[2]),
-        .data = buf_data,
-    };
+    return packet.new(header_buf[0], length, buf_data);
 }
 
 const addr = net.Address.initIp4(.{ 127, 0, 0, 1 }, 3000);
 
 pub fn main() !void {
-    const opts = net.Address.ListenOptions{ .reuse_address = true, .force_nonblocking = false, .kernel_backlog = 128, .reuse_port = true };
-    var server = try net.Address.listen(addr, opts);
+    var server = try net.Address.listen(addr, .{ .reuse_address = true });
     defer server.deinit();
 
     std.log.info("Listening at: {}\n", .{server.listen_address});
 
     while (true) {
-        var conn = try server.accept();
-        defer conn.stream.close();
-
-        var pkt = read_packet(conn.stream) catch |e| {
+        const conn = try server.accept();
+        handle_conn(conn) catch |e| {
             std.log.err("{}", .{e});
-            continue;
         };
-        defer pkt.destroy();
-        std.log.info("pkt = {}", .{pkt});
-        pkt.print_data();
     }
+}
+
+fn handle_conn(conn: std.net.Server.Connection) net.Stream.ReadError!void {
+    defer conn.stream.close();
+
+    var pkt = try read_packet(conn.stream);
+    defer pkt.destroy();
+    std.log.info("pkt = {}", .{pkt});
+    pkt.print_data();
 }

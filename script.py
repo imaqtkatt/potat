@@ -10,11 +10,10 @@ sock.connect((HOST, PORT))
 
 b = bytearray()
 b.append(0)
-b.append(0)
-b.append(3)
-b.append(42)
-b.append(42)
-b.append(42)
+b.append(0xFF)
+b.append(0xFF)
+for i in range(0xFFFF):
+  b.append(42)
 
 sock.sendall(b)
 
